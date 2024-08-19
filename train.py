@@ -2,6 +2,7 @@ from transformers import BertTokenizer, BertForQuestionAnswering
 from transformers import TrainingArguments, Trainer
 import torch
 import json
+from sklearn.model_selection import train_test_split
 
 # Wczytanie danych z pliku optimized_dataset.jsonl
 with open("optimized_dataset.jsonl", "r") as file:
@@ -69,16 +70,30 @@ class QADataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.encodings.input_ids)
 
+# Podział danych na zestaw treningowy i ewaluacyjny
+train_data, eval_data = train_test_split(data, test_size=0.1, random_state=42)
+
 train_dataset = QADataset(train_encodings)
+eval_dataset = QADataset(train_encodings)
 
 # Konfiguracja parametrów treningu
 training_args = TrainingArguments(
-    output_dir="./results",
-    num_train_epochs=3,
-    per_device_train_batch_size=16,
-    warmup_steps=500,
+    output_dir="./results_new_v2",
+    num_train_epochs=10,  # Zwiększono liczbę epok
+    per_device_train_batch_size=24,  # Zmniejszono rozmiar batcha dla lepszej generalizacji
+    #learning_rate=2e-5,  # Dodano explicite learning rate
+    warmup_ratio=0.1,  # Zmieniono na ratio zamiast steps
     weight_decay=0.01,
     logging_dir="./logs",
+    logging_steps=100,  # Dodano logging steps
+    save_steps=500,  # Dodano save steps
+    eval_strategy="steps",  # Dodano strategię ewaluacji
+    eval_steps=500,  # Dodano kroki ewaluacji
+    load_best_model_at_end=True,  # Ładowanie najlepszego modelu na końcu
+    metric_for_best_model="eval_loss",  # Metryka do wyboru najlepszego modelu
+    greater_is_better=False,  # Niższa strata jest lepsza
+    #fp16=True,  # Dodano mixed precision training dla przyspieszenia (jeśli GPU obsługuje)
+    gradient_accumulation_steps=2,  # Dodano akumulację gradientów
 )
 
 # Inicjalizacja trenera
@@ -86,10 +101,11 @@ trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=train_dataset,
+    eval_dataset=eval_dataset,  # Dodaj zestaw ewaluacyjny
 )
 
 # Rozpoczęcie treningu
 trainer.train()
 
 # Zapisanie wytrenowanego modelu
-model.save_pretrained("./trained_model")
+model.save_pretrained("./trained_model_new_v2")

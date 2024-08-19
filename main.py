@@ -3,10 +3,43 @@ import random
 import os
 from datasets import load_dataset
 from tqdm import tqdm
+from transformers import BertTokenizer
+
+# Inicjalizacja tokenizera
+tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+
+def truncate_context(context, max_length=400):
+    # Tokenizuj kontekst
+    tokens = tokenizer.tokenize(context)
+    
+    # Jeśli kontekst jest krótszy niż max_length, zwróć go bez zmian
+    if len(tokens) <= max_length:
+        return context
+    
+    # Znajdź ostatnią kropkę w dozwolonym zakresie
+    truncated_tokens = tokens[:max_length]
+    last_period_index = len(truncated_tokens) - 1
+    while last_period_index > 0 and truncated_tokens[last_period_index] != '.':
+        last_period_index -= 1
+    
+    # Jeśli nie znaleziono kropki, użyj całego dozwolonego zakresu
+    if last_period_index == 0:
+        last_period_index = len(truncated_tokens) - 1
+    
+    # Połącz tokeny z powrotem w tekst
+    truncated_context = tokenizer.convert_tokens_to_string(truncated_tokens[:last_period_index+1])
+    return truncated_context
 
 def refactor_data(example):
-    context = example['context']
+    context = truncate_context(example['context'])
     instruction = example['instruction']
+    
+    # Funkcja do sprawdzania i przycinania całkowitej długości
+    def check_and_truncate(text, max_length=512):
+        tokens = tokenizer.tokenize(text)
+        if len(tokens) > max_length:
+            return tokenizer.convert_tokens_to_string(tokens[:max_length])
+        return text
     
     # Podziel kontekst na zdania
     sentences = [s.strip() for s in context.split('.') if s.strip()]
@@ -20,6 +53,8 @@ def refactor_data(example):
         sentences_1.insert(insert_index, instruction)
         new_context_1 = '. '.join(sentences_1).strip()
     
+    new_context_1 = check_and_truncate(new_context_1)
+    
     # Druga wersja (zmodyfikowana)
     instruction_without_question_mark = instruction.rstrip('?')
     if len(sentences) <= 1:
@@ -29,6 +64,8 @@ def refactor_data(example):
         sentences_2 = sentences.copy()
         sentences_2.insert(insert_index, instruction_without_question_mark)
         new_context_2 = '. '.join(sentences_2).strip()
+    
+    new_context_2 = check_and_truncate(new_context_2)
     
     return [
         {
@@ -69,18 +106,48 @@ def optimize_dataset(input_file, output_file):
         return True
     
     try:
+        total_sequences = 0
+        filtered_sequences = 0
         with open(input_file, 'r', encoding='utf-8') as f_in, open(output_file, 'w', encoding='utf-8') as f_out:
             for line in tqdm(f_in, desc=f"Optymalizacja {output_file}", unit="line"):
+                total_sequences += 1
                 item = json.loads(line.strip())
-                optimized_item = {"context": item["context"], "question": item["instruction"]}
-                json.dump(optimized_item, f_out, ensure_ascii=False)
-                f_out.write('\n')
+                context_tokens = tokenizer.tokenize(item["context"])
+                question_tokens = tokenizer.tokenize(item["instruction"])
+                
+                if len(context_tokens) + len(question_tokens) <= 512:
+                    optimized_item = {"context": item["context"], "question": item["instruction"]}
+                    json.dump(optimized_item, f_out, ensure_ascii=False)
+                    f_out.write('\n')
+                else:
+                    filtered_sequences += 1
         
         print(f"Zoptymalizowany dataset zapisano do pliku {output_file}")
+        print(f"Usunięto {filtered_sequences} sekwencji przekraczających 512 tokenów.")
+        print(f"Pozostało {total_sequences - filtered_sequences} sekwencji.")
         return True
     except Exception as e:
         print(f"Wystąpił błąd podczas optymalizacji datasetu: {str(e)}")
         return False
+
+def check_sequence_lengths(filename):
+    long_sequences = 0
+    total_sequences = 0
+    max_length = 0
+    with open(filename, 'r', encoding='utf-8') as f:
+        for line in tqdm(f, desc="Sprawdzanie długości sekwencji"):
+            item = json.loads(line)
+            tokens = tokenizer.tokenize(item['context'] + ' ' + item['question'])
+            length = len(tokens)
+            total_sequences += 1
+            max_length = max(max_length, length)
+            if length > 512:
+                long_sequences += 1
+    
+    print(f"Liczba sekwencji dłuższych niż 512 tokenów: {long_sequences}")
+    print(f"Całkowita liczba sekwencji: {total_sequences}")
+    print(f"Procent długich sekwencji: {long_sequences/total_sequences*100:.2f}%")
+    print(f"Maksymalna długość sekwencji: {max_length}")
 
 # Załaduj dataset
 print("Ładowanie datasetu...")
@@ -139,3 +206,6 @@ for file in ["original_dataset.jsonl", "refactored_dataset.jsonl", "optimized_da
         print(f"Plik {file} istnieje.")
     else:
         print(f"Plik {file} nie istnieje.")
+
+if optimization_success:
+    check_sequence_lengths("optimized_dataset.jsonl")

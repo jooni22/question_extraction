@@ -1,49 +1,57 @@
-from transformers import AutoModelForQuestionAnswering, AutoTokenizer, BertTokenizerFast
-import torch
 import json
-import os
+from transformers import AutoTokenizer, AutoModelForQuestionAnswering
+import torch
 
-# 1. Załaduj model i tokenizer
-model_dir = "/root/question_extraction/trained_model"
-model = AutoModelForQuestionAnswering.from_pretrained(model_dir, local_files_only=True)
-tokenizer = BertTokenizerFast.from_pretrained(model_dir, local_files_only=True)
+# Wczytaj model i tokenizer
+model_path = "./trained_model_new/"
+model_checkpoint_path = "./results_new/checkpoint-1500/"
+tokenizer = AutoTokenizer.from_pretrained(model_path)
+model = AutoModelForQuestionAnswering.from_pretrained(model_checkpoint_path)
 
-def get_answer(model, tokenizer, question, context):
+# Funkcja do znajdowania odpowiedzi w kontekście
+def find_answer(context, question):
     inputs = tokenizer(question, context, return_tensors="pt")
     with torch.no_grad():
         outputs = model(**inputs)
     
     answer_start = torch.argmax(outputs.start_logits)
     answer_end = torch.argmax(outputs.end_logits) + 1
-    answer = tokenizer.convert_tokens_to_string(tokenizer.convert_ids_to_tokens(inputs["input_ids"][0][answer_start:answer_end]))
     
-    return answer
-
-def evaluate_model(model, tokenizer, examples):
-    correct = 0
-    total = len(examples)
+    # Rozszerz zakres odpowiedzi, aby uwzględnić znak zapytania
+    while answer_end < len(inputs["input_ids"][0]) and inputs["input_ids"][0][answer_end] != tokenizer.sep_token_id:
+        if tokenizer.decode(inputs["input_ids"][0][answer_end]) == "?":
+            answer_end += 1
+            break
+        answer_end += 1
     
-    for example in examples:
-        context = example['context']
-        question = example['question']
-        predicted_answer = get_answer(model, tokenizer, question, context)
-        
-        print(f"Kontekst: {context}")        
-        print(f"Pytanie z kontekstu: {question}")
-        print(f"Odpowiedź modelu: {predicted_answer}")
-        print("---")
-        
-    print(f"Liczba przykładów: {total}")
+    answer = tokenizer.decode(inputs["input_ids"][0][answer_start:answer_end])
+    return answer.strip()
 
-# Sprawdź, czy plik z przykładami testowymi istnieje
-test_file = 'test_examples.jsonl'
-if not os.path.exists(test_file):
-    print(f"Plik {test_file} nie istnieje. Proszę upewnić się, że plik jest w odpowiednim miejscu.")
-    exit(1)
+# Wczytaj dane testowe
+with open("test_examples.jsonl", "r", encoding="utf-8") as f:
+    test_data = [json.loads(line) for line in f]
 
-# Wczytaj przykłady testowe
-with open(test_file, 'r', encoding='utf-8') as f:
-    test_examples = [json.loads(line) for line in f]
+# Przeprowadź ewaluację
+correct = 0
+total = len(test_data)
 
-# Oceń model na przykładach testowych
-evaluate_model(model, tokenizer, test_examples)
+for example in test_data:
+    context = example["context"]
+    true_question = example["question"]
+    
+    # Znajdź pytanie w kontekście
+    predicted_question = find_answer(context, "What is the question in this context?")
+    
+    # Porównaj przewidziane pytanie z prawdziwym
+    if predicted_question.lower() == true_question.lower():
+        correct += 1
+    
+    # Wypisz wyniki dla każdego przykładu
+    print(f"Context: {context[:100]}...")
+    print(f"True question: {true_question}")
+    print(f"Predicted question: {predicted_question}")
+    print("-" * 50)
+
+# Oblicz i wypisz dokładność
+accuracy = correct / total
+print(f"Accuracy: {accuracy:.2f}")
