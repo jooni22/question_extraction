@@ -2,6 +2,7 @@ import json
 import random
 import os
 from datasets import load_dataset
+from tqdm import tqdm
 
 def refactor_data(example):
     context = example['context']
@@ -10,23 +11,39 @@ def refactor_data(example):
     # Podziel kontekst na zdania
     sentences = [s.strip() for s in context.split('.') if s.strip()]
     
+    # Pierwsza wersja (oryginalna)
     if len(sentences) <= 1:
-        # Jeśli jest tylko jedno zdanie, dodaj instrukcję na końcu
-        new_context = f"{context} {instruction}"
+        new_context_1 = f"{context} {instruction}"
     else:
-        # Wybierz losowe miejsce do wstawienia instrukcji, ale nie na początku
         insert_index = random.randint(1, len(sentences))
-        
-        # Wstaw instrukcję
-        sentences.insert(insert_index, instruction)
-        
-        # Połącz zdania z powrotem w jeden tekst
-        new_context = '. '.join(sentences).strip()
+        sentences_1 = sentences.copy()
+        sentences_1.insert(insert_index, instruction)
+        new_context_1 = '. '.join(sentences_1).strip()
     
-    return {
-        "context": new_context,
-        "question": instruction
-    }
+    # Druga wersja (zmodyfikowana)
+    instruction_without_question_mark = instruction.rstrip('?')
+    if len(sentences) <= 1:
+        new_context_2 = f"{instruction_without_question_mark}. {context}"
+    else:
+        insert_index = random.randint(1, len(sentences))
+        sentences_2 = sentences.copy()
+        sentences_2.insert(insert_index, instruction_without_question_mark)
+        new_context_2 = '. '.join(sentences_2).strip()
+    
+    return [
+        {
+            "instruction": example['instruction'],
+            "context": new_context_1,
+            "response": example['response'],
+            "category": example['category']
+        },
+        {
+            "instruction": instruction_without_question_mark,
+            "context": new_context_2,
+            "response": example['response'],
+            "category": example['category']
+        }
+    ]
 
 def save_dataset(dataset, filename):
     if os.path.exists(filename):
@@ -35,7 +52,7 @@ def save_dataset(dataset, filename):
     
     try:
         with open(filename, 'w', encoding='utf-8') as f:
-            for item in dataset:
+            for item in tqdm(dataset, desc=f"Zapisywanie {filename}", unit="example"):
                 json.dump(item, f, ensure_ascii=False)
                 f.write('\n')
         print(f"Zapisano dataset do pliku {filename}")
@@ -53,9 +70,9 @@ def optimize_dataset(input_file, output_file):
     
     try:
         with open(input_file, 'r', encoding='utf-8') as f_in, open(output_file, 'w', encoding='utf-8') as f_out:
-            for line in f_in:
+            for line in tqdm(f_in, desc=f"Optymalizacja {output_file}", unit="line"):
                 item = json.loads(line.strip())
-                optimized_item = {"context": item["context"], "question": item["question"]}
+                optimized_item = {"context": item["context"], "question": item["instruction"]}
                 json.dump(optimized_item, f_out, ensure_ascii=False)
                 f_out.write('\n')
         
@@ -80,7 +97,9 @@ filtered_dataset = dataset['train'].filter(lambda example: example['context'].st
 # Refaktoryzacja danych
 print("Refaktoryzacja danych...")
 try:
-    refactored_dataset = filtered_dataset.map(refactor_data)
+    refactored_dataset = []
+    for example in tqdm(filtered_dataset, desc="Refaktoryzacja", unit="example"):
+        refactored_dataset.extend(refactor_data(example))
 except Exception as e:
     print(f"Wystąpił błąd podczas refaktoryzacji danych: {str(e)}")
     exit(1)
